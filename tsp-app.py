@@ -5,6 +5,8 @@ import math
 import random
 import itertools
 from gurobipy import *
+import pandas as pd
+import io
 
 plt.rcParams['savefig.pad_inches'] = 0
 st.title('Travelling Salesman Problem')
@@ -22,7 +24,6 @@ def subtourelim(model, where):
             model.cbLazy(quicksum(model._vars[i, j] for i, j in itertools.combinations(tour, 2)) <= len(tour) - 1)
 
         current_length = round(model.cbGet(GRB.Callback.MIPSOL_OBJ))
-        best = round(model.cbGet(GRB.Callback.MIPSOL_OBJBST))
         bound = max(0, round(model.cbGet(GRB.Callback.MIPSOL_OBJBND)))
         model._summary.markdown(
             "**Sub-tour elimination constraints:** {:d}  \n**Lower bound:** {:d}km  \n**Current Solution:** {:d}km  - {:d} subtour(s)"
@@ -43,7 +44,7 @@ def subtourelim(model, where):
         ax.set_xlabel("km")
         ax.set_ylabel("km")
 
-        model._plot.pyplot(fig)  # Pass figure to Streamlit
+        model._plot.pyplot(fig)
 
 # Given a tuplelist of edges, find the shortest subtour
 def subtour(edges):
@@ -75,6 +76,7 @@ points = [(random.randint(0, 100), random.randint(0, 100)) for i in range(n)]
 dist = {(i, j): math.sqrt(sum((points[i][k] - points[j][k]) ** 2 for k in range(2)))
         for i in range(n) for j in range(i)}
 
+# Create model
 m = Model()
 m._subtours = 0
 m._summary = st.empty()
@@ -84,14 +86,14 @@ m._points = points
 # Create variables
 vars = m.addVars(dist.keys(), obj=dist, vtype=GRB.BINARY, name='e')
 
-# FIX: Ensure modification doesn't happen while iterating
+# Mirror variables
 for i, j in list(vars.keys()):
-    vars[j, i] = vars[i, j]  # Now modifying outside iteration
+    vars[j, i] = vars[i, j]
 
-# Add degree-2 constraint
+# Add constraints
 m.addConstrs(vars.sum(i, '*') == 2 for i in range(n))
 
-# Optimize model
+# Solve with lazy constraints
 m._vars = vars
 m.Params.lazyConstraints = 1
 m.optimize(subtourelim)
@@ -104,6 +106,7 @@ assert len(tour) == n
 tour.append(tour[0])
 points_tour = [points[i] for i in tour]
 
+# Summary Info
 current_length = round(m.objVal)
 bound = max(0, round(m.objVal))
 m._summary.markdown(
@@ -111,17 +114,44 @@ m._summary.markdown(
     .format(m._subtours, bound, current_length, len(tours))
 )
 
-# Final plot of the optimal tour
+# Final Plot
 fig, ax = plt.subplots()
 ax.plot([x[0] for x in points_tour], [x[1] for x in points_tour], '-o')
+for idx, (x, y) in enumerate(points):
+    ax.text(x + 1, y + 1, str(idx), fontsize=8)
+
 ax.set_xlim(0, 105)
 ax.set_ylim(0, 105)
 ax.set_xlabel("km")
 ax.set_ylabel("km")
 
-m._plot.pyplot(fig)  # Pass figure to Streamlit
+m._plot.pyplot(fig)
 
+# Show stats
 st.write('')
-st.write('Optimal cost: {:0.1f}km'.format(m.objVal))
-st.write('Running time to optimize: {:0.1f}s'.format(m.Runtime))
-st.write('Sub-tour constraints added: {:d}'.format(m._subtours))
+st.write('✅ Optimal cost: **{:0.1f}km**'.format(m.objVal))
+st.write('⏱️ Running time to optimize: **{:0.1f}s**'.format(m.Runtime))
+st.write('🔁 Sub-tour constraints added: **{:d}**'.format(m._subtours))
+
+# ------------------------ NEW ADDITIONS --------------------------
+
+# Distance matrix
+dist_matrix = np.zeros((n, n))
+for (i, j), d in dist.items():
+    dist_matrix[i][j] = dist_matrix[j][i] = d
+
+df = pd.DataFrame(dist_matrix, columns=[f"P{j}" for j in range(n)], index=[f"P{i}" for i in range(n)])
+
+st.subheader("📊 Distance Matrix (Euclidean Distance in km)")
+st.dataframe(df.style.background_gradient(cmap='Blues'), height=400)
+
+# Download button for distance matrix
+csv = df.to_csv(index=True)
+b64 = csv.encode()
+
+st.download_button(
+    label="📥 Download Distance Matrix as CSV",
+    data=b64,
+    file_name="distance_matrix.csv",
+    mime='text/csv'
+)
